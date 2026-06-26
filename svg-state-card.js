@@ -10,7 +10,9 @@ class SvgStateCard extends HTMLElement {
       type: "custom:svg-state-card",
       title: "SVG State",
       svg: "/local/floorplan.svg",
-      zones: [],
+      entity_aliases: {},
+      display: [],
+      action: [],
     };
   }
 
@@ -40,6 +42,9 @@ class SvgStateCard extends HTMLElement {
 
     this._config = {
       title: "",
+      entity_aliases: {},
+      display: [],
+      action: [],
       zones: [],
       tap_action: { action: "more-info" },
       double_tap_action: undefined,
@@ -152,7 +157,7 @@ class SvgStateCard extends HTMLElement {
           pointer-events: all;
         }
 
-        .svg-wrap [data-svg-state-zone] {
+        .svg-wrap [data-svg-state-display] {
           transition: fill 180ms ease, stroke 180ms ease, opacity 180ms ease;
         }
       </style>
@@ -170,18 +175,38 @@ class SvgStateCard extends HTMLElement {
     this._applyZoneStyles();
   }
 
-  _zones() {
-    return (this._config?.zones || []).filter((zone) => zone && this._zoneDisplayIds(zone).length > 0);
+  _displayBindings() {
+    const display = (this._config?.display || [])
+      .filter((binding) => binding && this._displayIds(binding).length > 0)
+      .map((binding) => this._normalizeBinding(binding, this._displayIds(binding)));
+
+    const zones = (this._config?.zones || [])
+      .filter((zone) => zone && this._displayIds(zone).length > 0)
+      .map((zone) => this._normalizeBinding(zone, this._displayIds(zone)));
+
+    return [...display, ...zones];
+  }
+
+  _actionBindings() {
+    const actions = (this._config?.action || [])
+      .filter((binding) => binding && this._actionIds(binding, false).length > 0)
+      .map((binding) => this._normalizeBinding(binding, this._actionIds(binding, false)));
+
+    const zones = (this._config?.zones || [])
+      .filter((zone) => zone && this._displayIds(zone).length > 0)
+      .map((zone) => this._normalizeBinding(zone, this._actionIds(zone, true)));
+
+    return [...actions, ...zones];
   }
 
   _stateSignature() {
-    return this._zones()
-      .map((zone) => {
-        const stateObj = this._hass?.states?.[zone.entity];
+    return this._displayBindings()
+      .map((binding) => {
+        const entityId = this._bindingEntityId(binding);
+        const stateObj = this._hass?.states?.[entityId];
         return [
-          this._zoneDisplayIds(zone).join(","),
-          this._zoneActionIds(zone).join(","),
-          zone.entity || "",
+          binding.ids.join(","),
+          entityId || "",
           stateObj?.state || "",
           stateObj?.last_changed || "",
           stateObj?.last_updated || "",
@@ -193,36 +218,32 @@ class SvgStateCard extends HTMLElement {
   _applyZoneStyles() {
     if (!this._config || !this._hass) return;
 
-    for (const zone of this._zones()) {
-      const elements = this._zoneElements(zone);
-      const primaryId = this._primaryZoneId(zone);
+    for (const binding of this._displayBindings()) {
+      const elements = this._elementsByIds(binding.ids);
+      const primaryId = binding.ids[0] || "";
+      const entityId = this._bindingEntityId(binding);
 
-      const stateObj = this._hass.states?.[zone.entity];
-      const color = this._zoneColor(zone, stateObj);
-      const opacity = this._zoneOpacity(zone, stateObj);
-      const stroke = this._zoneStroke(zone, stateObj);
+      const stateObj = this._hass.states?.[entityId];
+      const color = this._zoneColor(binding, stateObj);
+      const opacity = this._zoneOpacity(binding, stateObj);
+      const stroke = this._zoneStroke(binding, stateObj);
 
       for (const element of elements) {
-        element.dataset.svgStateZone = primaryId;
+        element.dataset.svgStateDisplay = primaryId;
         if (color) element.style.fill = color;
         if (stroke) element.style.stroke = stroke;
         if (opacity !== undefined) element.style.opacity = String(opacity);
       }
+    }
 
-      for (const element of this._zoneActionElements(zone)) {
-        element.dataset.svgStateAction = primaryId;
-        if (zone.entity) element.dataset.entityId = zone.entity;
+    for (const binding of this._actionBindings()) {
+      const entityId = this._bindingActionEntityId(binding) || this._bindingEntityId(binding);
+      for (const element of this._elementsByIds(binding.ids)) {
+        element.dataset.svgStateAction = binding.key;
+        if (entityId) element.dataset.entityId = entityId;
         element.style.pointerEvents = "all";
       }
     }
-  }
-
-  _zoneElements(zone) {
-    return this._elementsByIds(this._zoneDisplayIds(zone));
-  }
-
-  _zoneActionElements(zone) {
-    return this._elementsByIds(this._zoneActionIds(zone));
   }
 
   _elementsByIds(ids) {
@@ -235,17 +256,36 @@ class SvgStateCard extends HTMLElement {
     });
   }
 
-  _zoneDisplayIds(zone) {
-    return this._asArray(zone.id ?? zone.display_id ?? zone.display_ids ?? zone.element_id ?? zone.elements);
+  _normalizeBinding(binding, ids) {
+    return {
+      ...binding,
+      ids,
+      key: ids.join("|"),
+    };
   }
 
-  _zoneActionIds(zone) {
-    const actionIds = zone.action_id ?? zone.action_ids ?? zone.tap_id ?? zone.tap_ids ?? zone.control_id ?? zone.control_ids;
-    return this._asArray(actionIds ?? zone.id);
+  _displayIds(binding) {
+    return this._asArray(binding.id ?? binding.ids ?? binding.display_id ?? binding.display_ids ?? binding.element_id ?? binding.elements);
   }
 
-  _primaryZoneId(zone) {
-    return this._zoneDisplayIds(zone)[0] || "";
+  _actionIds(binding, fallbackToDisplay) {
+    const actionIds = binding.action_id ?? binding.action_ids ?? binding.tap_id ?? binding.tap_ids ?? binding.control_id ?? binding.control_ids;
+    if (actionIds !== undefined) return this._asArray(actionIds);
+    return fallbackToDisplay ? this._displayIds(binding) : this._asArray(binding.id ?? binding.ids);
+  }
+
+  _bindingEntityId(binding) {
+    return this._resolveEntityId(binding.entity_id || binding.entity || binding.entity_alias);
+  }
+
+  _bindingActionEntityId(binding) {
+    return this._resolveEntityId(binding.action_entity_id || binding.action_entity || binding.action_entity_alias);
+  }
+
+  _resolveEntityId(value) {
+    if (!value) return "";
+    const key = String(value);
+    return this._config?.entity_aliases?.[key] || key;
   }
 
   _asArray(value) {
@@ -355,7 +395,6 @@ class SvgStateCard extends HTMLElement {
     if (!target) return;
 
     this._pendingPointer = {
-      zoneId: target.dataset.svgStateZone,
       actionId: target.dataset.svgStateAction,
       entityId: target.dataset.entityId,
       pointerId: event.pointerId,
@@ -372,12 +411,12 @@ class SvgStateCard extends HTMLElement {
     const moved = Math.hypot(event.clientX - pending.x, event.clientY - pending.y);
     if (moved > 8) return;
 
-    const zone = this._zoneById(pending.actionId);
-    if (!zone) return;
+    const binding = this._actionBindingByKey(pending.actionId);
+    if (!binding) return;
 
     event.preventDefault();
     event.stopPropagation();
-    this._handleZoneTap(zone, pending.entityId);
+    this._handleZoneTap(binding, pending.entityId);
   }
 
   _clearPendingPointer() {
@@ -408,16 +447,18 @@ class SvgStateCard extends HTMLElement {
     }, delay);
   }
 
-  _zoneById(id) {
-    return this._zones().find((zone) => {
-      return this._zoneDisplayIds(zone).includes(id) || this._zoneActionIds(zone).includes(id);
-    });
+  _actionBindingByKey(key) {
+    return this._actionBindings().find((binding) => binding.key === key || binding.ids.includes(key));
   }
 
   async _performAction(actionConfig, zone, entityId) {
     const action = typeof actionConfig === "string" ? { action: actionConfig } : actionConfig || {};
     const actionName = String(action.action || "more-info").trim().toLowerCase();
-    const targetEntity = action.entity || action.entity_id || zone.action_entity || entityId || zone.entity;
+    const targetEntity =
+      this._resolveEntityId(action.entity_id || action.entity || action.entity_alias) ||
+      this._bindingActionEntityId(zone) ||
+      entityId ||
+      this._bindingEntityId(zone);
 
     if (actionName === "none" || actionName === "off") return;
     if (actionName === "more-info" || actionName === "more_info") {
