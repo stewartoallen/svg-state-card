@@ -1,0 +1,25 @@
+{
+  "name": "svg-state-card",
+  "version": "0.1.0",
+  "description": "Home Assistant Lovelace card for coloring and controlling SVG elements from entity state.",
+  "type": "module",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stewartoallen/svg-state-card.git"
+  },
+  "scripts": {
+    "check": "node --check svg-state-card.js"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "lovelace-card",
+    "custom-card",
+    "dashboard",
+    "svg",
+    "floorplan",
+    "hacs"
+  ],
+  "license": "MIT"
+}
