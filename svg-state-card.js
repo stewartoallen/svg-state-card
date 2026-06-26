@@ -1,4 +1,4 @@
-const SVG_STATE_CARD_VERSION = "0.1.0";
+const SVG_STATE_CARD_VERSION = "0.0.3";
 
 class SvgStateCard extends HTMLElement {
   static getConfigElement() {
@@ -11,6 +11,7 @@ class SvgStateCard extends HTMLElement {
       title: "SVG State",
       svg: "/local/floorplan.svg",
       entity_aliases: {},
+      display_defaults: {},
       display: [],
       action: [],
     };
@@ -27,9 +28,11 @@ class SvgStateCard extends HTMLElement {
     this._error = "";
     this._lastStateSignature = "";
     this._tapTimer = undefined;
+    this._holdTimer = undefined;
     this._pendingPointer = undefined;
 
     this.shadowRoot.addEventListener("pointerdown", (event) => this._handlePointerDown(event));
+    this.shadowRoot.addEventListener("pointermove", (event) => this._handlePointerMove(event));
     this.shadowRoot.addEventListener("pointerup", (event) => this._handlePointerUp(event));
     this.shadowRoot.addEventListener("pointercancel", () => this._clearPendingPointer());
     this.shadowRoot.addEventListener("click", (event) => this._handleClick(event));
@@ -43,6 +46,7 @@ class SvgStateCard extends HTMLElement {
     this._config = {
       title: "",
       entity_aliases: {},
+      display_defaults: {},
       display: [],
       action: [],
       zones: [],
@@ -178,11 +182,11 @@ class SvgStateCard extends HTMLElement {
   _displayBindings() {
     const display = (this._config?.display || [])
       .filter((binding) => binding && this._displayIds(binding).length > 0)
-      .map((binding) => this._normalizeBinding(binding, this._displayIds(binding)));
+      .map((binding) => this._normalizeBinding(this._withDisplayDefaults(binding), this._displayIds(binding)));
 
     const zones = (this._config?.zones || [])
       .filter((zone) => zone && this._displayIds(zone).length > 0)
-      .map((zone) => this._normalizeBinding(zone, this._displayIds(zone)));
+      .map((zone) => this._normalizeBinding(this._withDisplayDefaults(zone), this._displayIds(zone)));
 
     return [...display, ...zones];
   }
@@ -190,11 +194,11 @@ class SvgStateCard extends HTMLElement {
   _actionBindings() {
     const actions = (this._config?.action || [])
       .filter((binding) => binding && this._actionIds(binding, false).length > 0)
-      .map((binding) => this._normalizeBinding(binding, this._actionIds(binding, false)));
+      .map((binding) => this._normalizeActionBinding(binding, this._actionIds(binding, false)));
 
     const zones = (this._config?.zones || [])
       .filter((zone) => zone && this._displayIds(zone).length > 0)
-      .map((zone) => this._normalizeBinding(zone, this._actionIds(zone, true)));
+      .map((zone) => this._normalizeActionBinding(zone, this._actionIds(zone, true)));
 
     return [...actions, ...zones];
   }
@@ -264,6 +268,92 @@ class SvgStateCard extends HTMLElement {
     };
   }
 
+  _normalizeActionBinding(binding, ids) {
+    return {
+      ...this._normalizeBinding(binding, ids),
+      displayIds: this._actionDisplayIds(binding),
+    };
+  }
+
+  _withDisplayDefaults(binding) {
+    const defaults = this._displayDefaults();
+    const merged = {
+      ...defaults,
+      ...binding,
+    };
+
+    if (defaults.color_stops || binding.color_stops || binding.colors) {
+      merged.color_stops = {
+        ...(defaults.color_stops || {}),
+        ...(binding.color_stops || binding.colors || {}),
+      };
+      delete merged.colors;
+    }
+
+    if (defaults.state_colors || binding.state_colors || binding.state_color) {
+      merged.state_colors = {
+        ...(defaults.state_colors || {}),
+        ...(binding.state_colors || binding.state_color || {}),
+      };
+      delete merged.state_color;
+    }
+
+    if (defaults.state_opacity || binding.state_opacity) {
+      merged.state_opacity = {
+        ...(defaults.state_opacity || {}),
+        ...(binding.state_opacity || {}),
+      };
+    }
+
+    return merged;
+  }
+
+  _displayDefaults() {
+    const config = this._config || {};
+    const grouped = config.display_defaults || {};
+    const defaults = {};
+    const keys = [
+      "min",
+      "min_value",
+      "max",
+      "max_value",
+      "min_color",
+      "color_min",
+      "max_color",
+      "color_max",
+      "color_stops",
+      "colors",
+      "state_colors",
+      "state_color",
+      "default_color",
+      "stroke",
+      "opacity",
+      "state_opacity",
+    ];
+
+    for (const source of [config, grouped]) {
+      for (const key of keys) {
+        if (source[key] !== undefined) defaults[key] = source[key];
+      }
+
+      for (const [key, value] of Object.entries(source)) {
+        if (/^color_-?\d+(?:\.\d+)?$/.test(key)) defaults[key] = value;
+      }
+    }
+
+    if (defaults.colors && !defaults.color_stops) {
+      defaults.color_stops = defaults.colors;
+      delete defaults.colors;
+    }
+
+    if (defaults.state_color && !defaults.state_colors) {
+      defaults.state_colors = defaults.state_color;
+      delete defaults.state_color;
+    }
+
+    return defaults;
+  }
+
   _displayIds(binding) {
     return this._asArray(binding.id ?? binding.ids ?? binding.display_id ?? binding.display_ids ?? binding.element_id ?? binding.elements);
   }
@@ -272,6 +362,10 @@ class SvgStateCard extends HTMLElement {
     const actionIds = binding.action_id ?? binding.action_ids ?? binding.tap_id ?? binding.tap_ids ?? binding.control_id ?? binding.control_ids;
     if (actionIds !== undefined) return this._asArray(actionIds);
     return fallbackToDisplay ? this._displayIds(binding) : this._asArray(binding.id ?? binding.ids);
+  }
+
+  _actionDisplayIds(binding) {
+    return this._asArray(binding.display_id ?? binding.display_ids ?? binding.display);
   }
 
   _bindingEntityId(binding) {
@@ -394,19 +488,47 @@ class SvgStateCard extends HTMLElement {
     const target = event.target.closest?.("[data-svg-state-action]");
     if (!target) return;
 
+    const binding = this._actionBindingByKey(target.dataset.svgStateAction);
+    const hold = binding ? this._gestureAction(binding, "hold") : undefined;
+
     this._pendingPointer = {
       actionId: target.dataset.svgStateAction,
       entityId: target.dataset.entityId,
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
+      held: false,
     };
+
+    if (!binding || !hold) return;
+
+    const delay = Number(this._config?.hold_time_ms ?? this._config?.long_press_ms ?? 500);
+    this._holdTimer = setTimeout(() => {
+      if (!this._pendingPointer || this._pendingPointer.pointerId !== event.pointerId) return;
+      this._pendingPointer.held = true;
+      this._clearTapTimer();
+      this._performAction(hold.action, hold.source, target.dataset.entityId);
+    }, delay);
+  }
+
+  _handlePointerMove(event) {
+    const pending = this._pendingPointer;
+    if (!pending || pending.pointerId !== event.pointerId) return;
+
+    const moved = Math.hypot(event.clientX - pending.x, event.clientY - pending.y);
+    if (moved > 8) this._clearHoldTimer();
   }
 
   _handlePointerUp(event) {
     const pending = this._pendingPointer;
     this._pendingPointer = undefined;
+    this._clearHoldTimer();
     if (!pending || pending.pointerId !== event.pointerId) return;
+    if (pending.held) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
 
     const moved = Math.hypot(event.clientX - pending.x, event.clientY - pending.y);
     if (moved > 8) return;
@@ -421,6 +543,7 @@ class SvgStateCard extends HTMLElement {
 
   _clearPendingPointer() {
     this._pendingPointer = undefined;
+    this._clearHoldTimer();
   }
 
   _handleClick(event) {
@@ -435,20 +558,47 @@ class SvgStateCard extends HTMLElement {
     const delay = Number(this._config?.double_tap_window_ms ?? 260);
 
     if (this._tapTimer) {
-      clearTimeout(this._tapTimer);
-      this._tapTimer = undefined;
-      this._performAction(zone.double_tap_action || this._config.double_tap_action || { action: "more-info" }, zone, entityId);
+      this._clearTapTimer();
+      const gesture = this._gestureAction(zone, "double_tap") || { action: { action: "more-info" }, source: zone };
+      this._performAction(gesture.action, gesture.source, entityId);
       return;
     }
 
     this._tapTimer = setTimeout(() => {
       this._tapTimer = undefined;
-      this._performAction(zone.tap_action || this._config.tap_action || { action: "more-info" }, zone, entityId);
+      const gesture = this._gestureAction(zone, "tap") || { action: { action: "more-info" }, source: zone };
+      this._performAction(gesture.action, gesture.source, entityId);
     }, delay);
+  }
+
+  _clearTapTimer() {
+    if (!this._tapTimer) return;
+    clearTimeout(this._tapTimer);
+    this._tapTimer = undefined;
+  }
+
+  _clearHoldTimer() {
+    if (!this._holdTimer) return;
+    clearTimeout(this._holdTimer);
+    this._holdTimer = undefined;
+  }
+
+  _gestureAction(actionBinding, gesture) {
+    const display = this._linkedDisplayBinding(actionBinding);
+    const key = `${gesture}_action`;
+    if (actionBinding[key]) return { action: actionBinding[key], source: actionBinding };
+    if (display?.[key]) return { action: display[key], source: display };
+    if (this._config?.[key]) return { action: this._config[key], source: actionBinding };
+    return undefined;
   }
 
   _actionBindingByKey(key) {
     return this._actionBindings().find((binding) => binding.key === key || binding.ids.includes(key));
+  }
+
+  _linkedDisplayBinding(actionBinding) {
+    const displayIds = actionBinding.displayIds?.length ? actionBinding.displayIds : actionBinding.ids;
+    return this._displayBindings().find((binding) => binding.ids.some((id) => displayIds.includes(id)));
   }
 
   async _performAction(actionConfig, zone, entityId) {
@@ -457,8 +607,8 @@ class SvgStateCard extends HTMLElement {
     const targetEntity =
       this._resolveEntityId(action.entity_id || action.entity || action.entity_alias) ||
       this._bindingActionEntityId(zone) ||
-      entityId ||
-      this._bindingEntityId(zone);
+      this._bindingEntityId(zone) ||
+      entityId;
 
     if (actionName === "none" || actionName === "off") return;
     if (actionName === "more-info" || actionName === "more_info") {
