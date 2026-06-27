@@ -1,4 +1,4 @@
-const SVG_STATE_CARD_VERSION = "0.0.3";
+const SVG_STATE_CARD_VERSION = "0.0.4";
 
 class SvgStateCard extends HTMLElement {
   static getConfigElement() {
@@ -231,11 +231,13 @@ class SvgStateCard extends HTMLElement {
       const color = this._zoneColor(binding, stateObj);
       const opacity = this._zoneOpacity(binding, stateObj);
       const stroke = this._zoneStroke(binding, stateObj);
+      const colorTarget = this._colorTarget(binding);
 
       for (const element of elements) {
         element.dataset.svgStateDisplay = primaryId;
-        if (color) element.style.fill = color;
-        if (stroke) element.style.stroke = stroke;
+        if (color && (colorTarget === "fill" || colorTarget === "both")) element.style.fill = color;
+        if (color && (colorTarget === "stroke" || colorTarget === "both")) element.style.stroke = color;
+        if (stroke && colorTarget !== "stroke" && colorTarget !== "both") element.style.stroke = stroke;
         if (opacity !== undefined) element.style.opacity = String(opacity);
       }
     }
@@ -326,6 +328,7 @@ class SvgStateCard extends HTMLElement {
       "state_colors",
       "state_color",
       "default_color",
+      "color_target",
       "stroke",
       "opacity",
       "state_opacity",
@@ -482,6 +485,12 @@ class SvgStateCard extends HTMLElement {
 
   _zoneStroke(zone) {
     return zone.stroke || "";
+  }
+
+  _colorTarget(binding) {
+    const target = String(binding.color_target || "fill").trim().toLowerCase();
+    if (target === "stroke" || target === "both") return target;
+    return "fill";
   }
 
   _handlePointerDown(event) {

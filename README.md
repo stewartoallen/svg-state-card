@@ -122,8 +122,9 @@ action:
 | `display[].color_<number>` | color | none | Additional numeric interpolation stop. |
 | `display[].color_stops` | object | none | Numeric value-to-color map. |
 | `display[].state_colors` | object | none | State-to-color map. Keys can use `|` aliases. |
-| `display[].default_color` | color | none | Fallback fill color. |
-| `display[].stroke` | color | none | Runtime stroke color. |
+| `display[].default_color` | color | none | Fallback computed color. |
+| `display[].color_target` | string | `fill` | Where computed colors apply: `fill`, `stroke`, or `both`. |
+| `display[].stroke` | color | none | Fixed runtime stroke color when `color_target` is `fill`. |
 | `display[].opacity` | number | none | Runtime opacity. |
 | `display[].state_opacity` | object | none | State-to-opacity map. Keys can use `|` aliases. |
 | `display[].tap_action` | object/string | card default | Tap action inherited by linked action bindings. |
@@ -196,6 +197,36 @@ display:
     entity_id: sensor.server_room_temperature
     max: 95
     max_color: "#7e22ce"
+```
+
+Computed colors apply to SVG fill by default. Use `color_target` when an SVG needs stroke coloring instead:
+
+```yaml
+display:
+  - id: kitchen_heat_outline
+    entity_alias: kitchen_heat
+    color_target: stroke
+    state_colors:
+      "on": "#f97316"
+      "off": "#334155"
+```
+
+For non-numeric states, use keyed `state_colors`. Matching is case-insensitive and keys can contain `|` aliases:
+
+```yaml
+display_defaults:
+  state_colors:
+    "on|heat|heating": "#f97316"
+    "off|idle": "#334155"
+    "unknown|unavailable": "#666666"
+
+display:
+  - id: floor_zone_a
+    entity_alias: zone_a_heat
+  - id: floor_zone_b
+    entity_alias: zone_b_heat
+    state_colors:
+      "on": "#ef4444"
 ```
 
 Display and action elements can be separate. Prefer `display` for the SVG element or elements that should be colored, and `action` for transparent overlays or other SVG elements that should receive tap/double-tap actions:
